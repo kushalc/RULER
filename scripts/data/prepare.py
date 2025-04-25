@@ -33,17 +33,19 @@ python prepare.py \
 import os
 import argparse
 import importlib
-import subprocess
+import logging
+import runpy
 import time
 import yaml
+import sys
 from pathlib import Path
-from template import Templates
+from data.template import Templates
 import nltk
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt')
- 
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save_dir", type=Path, required=True, help='dataset folder to save dataset')
@@ -62,14 +64,15 @@ parser.add_argument("--chunk_amount", type=int, default=1, help='size of split c
 
 args = parser.parse_args()
 
+
 def main():
     start_time = time.time()
     curr_folder = os.path.dirname(os.path.abspath(__file__))
-    
+
     try:
-        module = importlib.import_module(f"{args.benchmark}.constants")
+        module = importlib.import_module(f"data.{args.benchmark}.constants")
     except ImportError:
-        print(f"Module data.{args.benchmark}.constants not found.")
+        logging.warning(f"Module data.{args.benchmark}.constants not found.")
 
     tasks_base = module.TASKS
     with open(os.path.join(curr_folder, f"../{args.benchmark}.yaml"), "r") as f:
@@ -77,35 +80,36 @@ def main():
 
     if args.task not in tasks_customized:
         raise ValueError(f'{args.task} is not found in config_tasks.yaml')
-        
+
     config = tasks_customized.get(args.task)
     config.update(tasks_base[config['task']])
 
     # Add templates
-    assert args.model_template_type in Templates, print(f'{args.model_template_type} is not found in {Templates.keys()}')
-    model_template = Templates[args.model_template_type]    
+    assert args.model_template_type in Templates, logging.warning(f'{args.model_template_type} is not found in {Templates.keys()}')
+    model_template = Templates[args.model_template_type]
     task_template = config['template']
 
     # Add answer prefix for all models
     answer_prefix = config['answer_prefix'] if 'answer_prefix' in config else ''
     config['template'] = model_template.format(task_template=task_template) + answer_prefix
 
-    # Split task into multiple chunks 
+    # Split task into multiple chunks
     chunks = [(args.num_samples // args.chunk_amount) + (1 if i < args.num_samples % args.chunk_amount else 0) for i in range(args.chunk_amount)]
     num_samples = chunks[args.chunk_idx]
     pre_samples = sum(chunks[:args.chunk_idx])
-    
+
     random_seed = args.random_seed + args.chunk_idx
 
-    
     save_file = args.save_dir / args.task / f"{args.subset}.jsonl"
     file_exists = False
     if os.path.exists(save_file):
         with open(save_file, "r") as f:
             data = f.readlines()
-        if len(data) == args.num_samples: file_exists = True
+        if len(data) == args.num_samples:
+            file_exists = True
 
     if not file_exists:
+        _orig_argv = sys.argv.copy()
         try:
             script = os.path.join(curr_folder, args.benchmark, f"{config['task']}.py")
             additional_args = " ".join([f"--{k} {v}" for k, v in config['args'].items()])
@@ -122,29 +126,18 @@ def main():
             {additional_args} \
             {f"--remove_newline_tab" if args.remove_newline_tab else ""} \
             {f"--pre_samples {pre_samples}" if config['task'] == 'qa' else ""} \
-            --template "{config['template']}"
             """
-            print(command)
-            result = subprocess.run(command, 
-                                    shell=True, 
-                                    check=True, 
-                                    stdout=subprocess.PIPE, 
-                                    stderr=subprocess.PIPE, 
-                                    text=True)
-            
-            if result.returncode == 0:
-                print("Output:")
-                print(result.stdout)
-            else:
-                print("Error:")
-                print(result.stderr)
-        except subprocess.CalledProcessError as e:
-            print("Error output:", e.stderr)
 
-        print(f"Prepare {args.task} with lines: {args.num_samples} to {save_file}")
-        print(f"Used time: {round((time.time() - start_time) / 60, 1)} minutes")
+            sys.argv = command.split()[1:] + ["--template", f"{config['template']}"]
+            runpy.run_path(str(script), run_name="__main__")
+        finally:
+            sys.argv = _orig_argv
+
+        logging.debug(f"Prepare {args.task} with lines: {args.num_samples} to {save_file}")
+        logging.debug(f"Used time: {round((time.time() - start_time) / 60, 1)} minutes")
     else:
-        print(f"Skip preparing {args.task} with lines: {args.num_samples} to {save_file} (file exists)")
-    
+        logging.debug(f"Skip preparing {args.task} with lines: {args.num_samples} to {save_file} (file exists)")
+
+
 if __name__ == '__main__':
     main()

@@ -25,8 +25,11 @@ python niah.py \
     --num_samples=10 \
     --template="Some special magic {type_needle_v} are hidden within the following text. Make sure to memorize it. I will quiz you about the {type_needle_v} afterwards.\n{context}\nWhat are all the special magic {type_needle_v} for {query} mentioned in the provided text? The special magic {type_needle_v} for {query} mentioned in the provided text are"
 """
+from nltk.tokenize import sent_tokenize
+from data.tokenizer import select_tokenizer
 import os
 import re
+import logging
 import json
 import uuid
 import argparse
@@ -38,9 +41,7 @@ import random
 import wonderwords
 from nemo.collections.asr.parts.utils.manifest_utils import read_manifest, write_manifest
 import sys
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")) 
-from tokenizer import select_tokenizer
-from nltk.tokenize import sent_tokenize
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
 parser = argparse.ArgumentParser()
@@ -73,7 +74,7 @@ args.num_needle_k = max(args.num_needle_k, args.num_needle_q)
 # Load Tokenizer
 TOKENIZER = select_tokenizer(args.tokenizer_type, args.tokenizer_path)
 
-# Define Needle/Haystack Format 
+# Define Needle/Haystack Format
 needle = "One of the special magic {type_needle_v} for {key} is: {value}."
 if args.type_haystack == 'essay':
     essay = os.path.join(os.path.dirname(os.path.abspath(__file__)), "json/PaulGrahamEssays.json")
@@ -104,12 +105,15 @@ def generate_random_number(num_digits=7):
     upper_bound = 10**num_digits - 1
     return str(random.randint(lower_bound, upper_bound))
 
+
 def generate_random_word():
     word = random.choice(words)
     return word
 
+
 def generate_random_uuid():
     return str(uuid.UUID(int=random.getrandbits(128), version=4))
+
 
 def generate_random(type_needle: str):
     if type_needle == 'numbers':
@@ -121,6 +125,7 @@ def generate_random(type_needle: str):
     else:
         raise NotImplementedError(f'{args.type_needle} is not implemented.')
 
+
 def generate_input_output(num_haystack):
     keys, values, needles = [], [], []
     for _ in range(args.num_needle_k):
@@ -130,22 +135,22 @@ def generate_input_output(num_haystack):
             value.append(generate_random(args.type_needle_v))
             needles.append(needle.format(
                 type_needle_v=args.type_needle_v,
-                key=keys[-1], 
+                key=keys[-1],
                 value=value[-1],
             ))
         values.append(value)
-    
+
     random.Random(args.random_seed).shuffle(needles)
-    
+
     # Context
     if args.type_haystack == 'essay':
         text = " ".join(haystack[:num_haystack])
         document_sents = sent_tokenize(text.strip())
         insertion_positions = [0] + \
-                              sorted([int(len(document_sents) * (depth / 100)) for depth in random.sample(DEPTHS, len(needles))]) + \
-                              [len(document_sents)]
+            sorted([int(len(document_sents) * (depth / 100)) for depth in random.sample(DEPTHS, len(needles))]) + \
+            [len(document_sents)]
         document_sents_list = []
-        for i in range(1,len(insertion_positions)):
+        for i in range(1, len(insertion_positions)):
             last_pos = insertion_positions[i-1]
             next_pos = insertion_positions[i]
             document_sents_list.append(" ".join(document_sents[last_pos:next_pos]))
@@ -163,19 +168,17 @@ def generate_input_output(num_haystack):
                 value=generate_random(args.type_needle_v),
             ) for _ in range(num_haystack)]
 
-            
         indexes = sorted(random.sample(range(num_haystack), len(needles)), reverse=True)
         for index, element in zip(indexes, needles):
             sentences.insert(index, element)
         context = "\n".join(sentences)
 
-
-    ## Query and Answer
+    # Query and Answer
     indices = random.sample(range(args.num_needle_k), args.num_needle_q)
     queries = [keys[i] for i in indices]
     answers = [a for i in indices for a in values[i]]
     query = ', '.join(queries[:-1]) + ', and ' + queries[-1] if len(queries) > 1 else queries[0]
-    
+
     template = args.template
     type_needle_v = args.type_needle_v
     if args.num_needle_q * args.num_needle_v == 1:
@@ -183,7 +186,7 @@ def generate_input_output(num_haystack):
         template = template.replace('are all', 'is')
         template = template.replace('are', 'is')
         template = template.replace('answers', 'answer')
-        type_needle_v = type_needle_v[:-1] # remove "s"
+        type_needle_v = type_needle_v[:-1]  # remove "s"
 
     input_text = template.format(
         type_needle_v=type_needle_v,
@@ -204,43 +207,43 @@ def generate_samples(num_samples: int, max_seq_length: int, save_dir: str, incre
         incremental = 25
     elif args.type_haystack == 'needle':
         incremental = 25
-        
+
     if args.type_haystack != 'essay' and args.max_seq_length < 4096:
         incremental = 5
 
     num_haystack = incremental
-        
+
     total_tokens = 0  # Track the total tokens generated for the first example
-    while total_tokens + tokens_to_generate < max_seq_length :  
+    while total_tokens + tokens_to_generate < max_seq_length:
         input_text, answer = generate_input_output(num_haystack)
         # Calculate the number of tokens in the example
         total_tokens = len(TOKENIZER.text_to_tokens(input_text + ' '.join(answer)))
-        print(f'Max length {max_seq_length} | Current length {total_tokens + tokens_to_generate} | Haystack: {num_haystack}')
+        logging.debug(f'Max length {max_seq_length} | Current length {total_tokens + tokens_to_generate} | Haystack: {num_haystack}')
         if total_tokens + tokens_to_generate > max_seq_length:
             num_haystack -= incremental
             break
-    
+
         if args.type_haystack == 'essay' and num_haystack > len(haystack):
             num_haystack = len(haystack)
             break
-        
+
         num_haystack += incremental
 
-    print('Num haystack:', num_haystack)
-    
+    logging.debug('Num haystack:', num_haystack)
+
     # Generate samples
     for index in tqdm(range(num_samples)):
         used_haystack = num_haystack
-        while(True):
+        while (True):
             try:
-                input_text, answer  = generate_input_output(used_haystack)
+                input_text, answer = generate_input_output(used_haystack)
                 length = len(TOKENIZER.text_to_tokens(input_text)) + tokens_to_generate
                 assert length <= max_seq_length, f"{length} exceeds max_seq_length."
                 break
             except:
                 if used_haystack > incremental:
                     used_haystack -= incremental
-        
+
         if args.remove_newline_tab:
             input_text = ' '.join(input_text.replace('\n', ' ').replace('\t', ' ').strip().split())
 
@@ -260,12 +263,13 @@ def main():
     save_file.parent.mkdir(parents=True, exist_ok=True)
 
     write_jsons = generate_samples(
-        num_samples=args.num_samples, 
+        num_samples=args.num_samples,
         max_seq_length=args.max_seq_length,
         save_dir=args.save_dir
     )
 
     write_manifest(save_file, write_jsons)
+
 
 if __name__ == "__main__":
     main()
