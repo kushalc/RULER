@@ -21,12 +21,20 @@ TASK_NAME: {
 """
 
 
-def string_match_part(preds, refs):
+def string_match_part(preds, refs, nonnull_only=True):
+    if nonnull_only:
+        idx = [i for i, p in enumerate(preds) if len(p) >= 0]
+        preds = [preds[i] for i in idx]
+        refs = [refs[i] for i in idx]
     score = sum([max([1.0 if r.lower() in pred.lower() else 0.0 for r in ref]) for pred, ref in zip(preds, refs)]) / len(preds)
     return score
 
 
-def string_match_all(preds, refs):
+def string_match_all(preds, refs, nonnull_only=True):
+    if nonnull_only:
+        idx = [i for i, p in enumerate(preds) if len(p) >= 0]
+        preds = [preds[i] for i in idx]
+        refs = [refs[i] for i in idx]
     score = sum([sum([1.0 if r.lower() in pred.lower() else 0.0 for r in ref]) / len(ref) for pred, ref in zip(preds, refs)]) / len(preds)
     return score
 
